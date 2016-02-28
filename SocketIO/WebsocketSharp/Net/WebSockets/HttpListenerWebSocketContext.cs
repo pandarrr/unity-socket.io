@@ -4,7 +4,7 @@
  *
  * The MIT License
  *
- * Copyright (c) 2012-2014 sta.blockhead
+ * Copyright (c) 2012-2015 sta.blockhead
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -29,6 +29,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.IO;
 using System.Security.Principal;
 
 namespace WebSocketSharp.Net.WebSockets
@@ -37,8 +38,6 @@ namespace WebSocketSharp.Net.WebSockets
   /// Provides the properties used to access the information in a WebSocket connection request
   /// received by the <see cref="HttpListener"/>.
   /// </summary>
-  /// <remarks>
-  /// </remarks>
   public class HttpListenerWebSocketContext : WebSocketContext
   {
     #region Private Fields
@@ -50,20 +49,25 @@ namespace WebSocketSharp.Net.WebSockets
 
     #region Internal Constructors
 
-    internal HttpListenerWebSocketContext (
-      HttpListenerContext context, string protocol, Logger logger)
+    internal HttpListenerWebSocketContext (HttpListenerContext context, string protocol)
     {
       _context = context;
-      _websocket = new WebSocket (this, protocol, logger);
+      _websocket = new WebSocket (this, protocol);
     }
 
     #endregion
 
     #region Internal Properties
 
-    internal WebSocketStream Stream {
+    internal Logger Log {
       get {
-        return _context.Connection.GetWebSocketStream ();
+        return _context.Listener.Log;
+      }
+    }
+
+    internal Stream Stream {
+      get {
+        return _context.Connection.Stream;
       }
     }
 
@@ -103,7 +107,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// </value>
     public override string Host {
       get {
-        return _context.Request.Headers ["Host"];
+        return _context.Request.Headers["Host"];
       }
     }
 
@@ -115,7 +119,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// </value>
     public override bool IsAuthenticated {
       get {
-        return _context.Request.IsAuthenticated;
+        return _context.User != null;
       }
     }
 
@@ -163,7 +167,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// </value>
     public override string Origin {
       get {
-        return _context.Request.Headers ["Origin"];
+        return _context.Request.Headers["Origin"];
       }
     }
 
@@ -203,7 +207,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// </value>
     public override string SecWebSocketKey {
       get {
-        return _context.Request.Headers ["Sec-WebSocket-Key"];
+        return _context.Request.Headers["Sec-WebSocket-Key"];
       }
     }
 
@@ -220,7 +224,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// </value>
     public override IEnumerable<string> SecWebSocketProtocols {
       get {
-        var protocols = _context.Request.Headers ["Sec-WebSocket-Protocol"];
+        var protocols = _context.Request.Headers["Sec-WebSocket-Protocol"];
         if (protocols != null)
           foreach (var protocol in protocols.Split (','))
             yield return protocol.Trim ();
@@ -238,7 +242,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// </value>
     public override string SecWebSocketVersion {
       get {
-        return _context.Request.Headers ["Sec-WebSocket-Version"];
+        return _context.Request.Headers["Sec-WebSocket-Version"];
       }
     }
 
@@ -258,7 +262,7 @@ namespace WebSocketSharp.Net.WebSockets
     /// Gets the client information (identity, authentication, and security roles).
     /// </summary>
     /// <value>
-    /// A <see cref="IPrincipal"/> that represents the client information.
+    /// A <see cref="IPrincipal"/> instance that represents the client information.
     /// </value>
     public override IPrincipal User {
       get {

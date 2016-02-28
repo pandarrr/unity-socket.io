@@ -1,14 +1,14 @@
 #region License
 /*
- * ListenerAsyncResult.cs
+ * HttpListenerAsyncResult.cs
  *
- * This code is derived from System.Net.ListenerAsyncResult.cs of Mono
+ * This code is derived from ListenerAsyncResult.cs (System.Net) of Mono
  * (http://www.mono-project.com).
  *
  * The MIT License
  *
  * Copyright (c) 2005 Ximian, Inc. (http://www.ximian.com)
- * Copyright (c) 2012-2014 sta.blockhead
+ * Copyright (c) 2012-2015 sta.blockhead
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -37,40 +37,67 @@
  */
 #endregion
 
+#region Contributors
+/*
+ * Contributors:
+ * - Nicholas Devenish
+ */
+#endregion
+
 using System;
+using System.Security.Principal;
 using System.Threading;
 
 namespace WebSocketSharp.Net
 {
-  internal class ListenerAsyncResult : IAsyncResult
+  internal class HttpListenerAsyncResult : IAsyncResult
   {
     #region Private Fields
 
     private AsyncCallback       _callback;
     private bool                _completed;
     private HttpListenerContext _context;
+    private bool                _endCalled;
     private Exception           _exception;
-    private ManualResetEvent    _waitHandle;
+    private bool                _inGet;
     private object              _state;
     private object              _sync;
     private bool                _syncCompleted;
+    private ManualResetEvent    _waitHandle;
 
     #endregion
 
-    #region Internal Fields
+    #region Internal Constructors
 
-    internal bool EndCalled;
-    internal bool InGet;
-
-    #endregion
-
-    #region Public Constructors
-
-    public ListenerAsyncResult (AsyncCallback callback, object state)
+    internal HttpListenerAsyncResult (AsyncCallback callback, object state)
     {
       _callback = callback;
       _state = state;
       _sync = new object ();
+    }
+
+    #endregion
+
+    #region Internal Properties
+
+    internal bool EndCalled {
+      get {
+        return _endCalled;
+      }
+
+      set {
+        _endCalled = value;
+      }
+    }
+
+    internal bool InGet {
+      get {
+        return _inGet;
+      }
+
+      set {
+        _inGet = value;
+      }
     }
 
     #endregion
@@ -107,14 +134,25 @@ namespace WebSocketSharp.Net
 
     #region Private Methods
 
-    private static void invokeCallback (object state)
+    private static void complete (HttpListenerAsyncResult asyncResult)
     {
-      try {
-        var ares = (ListenerAsyncResult) state;
-        ares._callback (ares);
-      }
-      catch {
-      }
+      asyncResult._completed = true;
+
+      var waitHandle = asyncResult._waitHandle;
+      if (waitHandle != null)
+        waitHandle.Set ();
+
+      var callback = asyncResult._callback;
+      if (callback != null)
+        ThreadPool.QueueUserWorkItem (
+          state => {
+            try {
+              callback (asyncResult);
+            }
+            catch {
+            }
+          },
+          null);
     }
 
     #endregion
@@ -123,18 +161,12 @@ namespace WebSocketSharp.Net
 
     internal void Complete (Exception exception)
     {
-      _exception = InGet && (exception is ObjectDisposedException)
+      _exception = _inGet && (exception is ObjectDisposedException)
                    ? new HttpListenerException (500, "Listener closed.")
                    : exception;
 
-      lock (_sync) {
-        _completed = true;
-        if (_waitHandle != null)
-          _waitHandle.Set ();
-
-        if (_callback != null)
-          ThreadPool.QueueUserWorkItem(invokeCallback, this);
-      }
+      lock (_sync)
+        complete (this);
     }
 
     internal void Complete (HttpListenerContext context)
@@ -144,45 +176,17 @@ namespace WebSocketSharp.Net
 
     internal void Complete (HttpListenerContext context, bool syncCompleted)
     {
-      var listener = context.Listener;
-      var scheme = listener.SelectAuthenticationScheme (context);
-      if (scheme == AuthenticationSchemes.None) {
-        context.Response.Close (HttpStatusCode.Forbidden);
-        listener.BeginGetContext (this);
-
-        return;
-      }
-
-      var header = context.Request.Headers ["Authorization"];
-      if (scheme == AuthenticationSchemes.Basic &&
-          (header == null || !header.StartsWith ("basic", StringComparison.OrdinalIgnoreCase))) {
-        context.Response.CloseWithAuthChallenge (
-          AuthenticationChallenge.CreateBasicChallenge (listener.Realm).ToBasicString ());
-
-        listener.BeginGetContext (this);
-        return;
-      }
-
-      if (scheme == AuthenticationSchemes.Digest &&
-          (header == null || !header.StartsWith ("digest", StringComparison.OrdinalIgnoreCase))) {
-        context.Response.CloseWithAuthChallenge (
-          AuthenticationChallenge.CreateDigestChallenge (listener.Realm).ToDigestString ());
-
-        listener.BeginGetContext (this);
+      var lsnr = context.Listener;
+      if (!lsnr.Authenticate (context)) {
+        lsnr.BeginGetContext (this);
         return;
       }
 
       _context = context;
       _syncCompleted = syncCompleted;
 
-      lock (_sync) {
-        _completed = true;
-        if (_waitHandle != null)
-          _waitHandle.Set ();
-
-        if (_callback != null)
-          ThreadPool.QueueUserWorkItem(invokeCallback, this);
-      }
+      lock (_sync)
+        complete (this);
     }
 
     internal HttpListenerContext GetContext ()

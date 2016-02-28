@@ -2,13 +2,13 @@
 /*
  * HttpListenerContext.cs
  *
- * This code is derived from System.Net.HttpListenerContext.cs of Mono
+ * This code is derived from HttpListenerContext.cs (System.Net) of Mono
  * (http://www.mono-project.com).
  *
  * The MIT License
  *
  * Copyright (c) 2005 Novell, Inc. (http://www.novell.com)
- * Copyright (c) 2012-2014 sta.blockhead
+ * Copyright (c) 2012-2015 sta.blockhead
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -44,8 +44,8 @@ using WebSocketSharp.Net.WebSockets;
 namespace WebSocketSharp.Net
 {
   /// <summary>
-  /// Provides a set of methods and properties used to access the HTTP request and response
-  /// information used by the <see cref="HttpListener"/>.
+  /// Provides the access to the HTTP request and response information
+  /// used by the <see cref="HttpListener"/>.
   /// </summary>
   /// <remarks>
   /// The HttpListenerContext class cannot be inherited.
@@ -57,15 +57,10 @@ namespace WebSocketSharp.Net
     private HttpConnection       _connection;
     private string               _error;
     private int                  _errorStatus;
+    private HttpListener         _listener;
     private HttpListenerRequest  _request;
     private HttpListenerResponse _response;
     private IPrincipal           _user;
-
-    #endregion
-
-    #region Internal Fields
-
-    internal HttpListener Listener;
 
     #endregion
 
@@ -115,6 +110,16 @@ namespace WebSocketSharp.Net
       }
     }
 
+    internal HttpListener Listener {
+      get {
+        return _listener;
+      }
+
+      set {
+        _listener = value;
+      }
+    }
+
     #endregion
 
     #region Public Properties
@@ -147,50 +152,16 @@ namespace WebSocketSharp.Net
     /// Gets the client information (identity, authentication, and security roles).
     /// </summary>
     /// <value>
-    /// A <see cref="IPrincipal"/> that represents the client information.
+    /// A <see cref="IPrincipal"/> instance that represents the client information.
     /// </value>
     public IPrincipal User {
       get {
         return _user;
       }
-    }
 
-    #endregion
-
-    #region Internal Methods
-
-    internal void SetUser (
-      AuthenticationSchemes scheme,
-      string realm,
-      Func<IIdentity, NetworkCredential> credentialsFinder)
-    {
-      var authRes = AuthenticationResponse.Parse (_request.Headers ["Authorization"]);
-      if (authRes == null)
-        return;
-
-      var id = authRes.ToIdentity ();
-      if (id == null)
-        return;
-
-      NetworkCredential cred = null;
-      try {
-        cred = credentialsFinder (id);
+      internal set {
+        _user = value;
       }
-      catch {
-      }
-
-      if (cred == null)
-        return;
-
-      var valid = scheme == AuthenticationSchemes.Basic
-                  ? ((HttpBasicIdentity) id).Password == cred.Password
-                  : scheme == AuthenticationSchemes.Digest
-                    ? ((HttpDigestIdentity) id).IsValid (
-                        cred.Password, realm, _request.HttpMethod, null)
-                    : false;
-
-      if (valid)
-        _user = new GenericPrincipal (id, cred.Roles);
     }
 
     #endregion
@@ -207,9 +178,6 @@ namespace WebSocketSharp.Net
     /// <param name="protocol">
     /// A <see cref="string"/> that represents the subprotocol used in the WebSocket connection.
     /// </param>
-    /// <param name="logger">
-    /// A <see cref="Logger"/> that provides the logging functions used in the WebSocket attempts.
-    /// </param>
     /// <exception cref="ArgumentException">
     ///   <para>
     ///   <paramref name="protocol"/> is empty.
@@ -221,7 +189,7 @@ namespace WebSocketSharp.Net
     ///   <paramref name="protocol"/> contains an invalid character.
     ///   </para>
     /// </exception>
-    public HttpListenerWebSocketContext AcceptWebSocket (string protocol, Logger logger)
+    public HttpListenerWebSocketContext AcceptWebSocket (string protocol)
     {
       if (protocol != null) {
         if (protocol.Length == 0)
@@ -231,7 +199,7 @@ namespace WebSocketSharp.Net
           throw new ArgumentException ("Contains an invalid character.", "protocol");
       }
 
-      return new HttpListenerWebSocketContext (this, protocol, logger ?? new Logger ());
+      return new HttpListenerWebSocketContext (this, protocol);
     }
 
     #endregion

@@ -1,10 +1,10 @@
 #region License
 /*
- * HandshakeRequest.cs
+ * HttpRequest.cs
  *
  * The MIT License
  *
- * Copyright (c) 2012-2014 sta.blockhead
+ * Copyright (c) 2012-2015 sta.blockhead
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -26,56 +26,60 @@
  */
 #endregion
 
+#region Contributors
+/*
+ * Contributors:
+ * - David Burhans
+ */
+#endregion
+
 using System;
 using System.Collections.Specialized;
+using System.IO;
 using System.Text;
 using WebSocketSharp.Net;
 
 namespace WebSocketSharp
 {
-  internal class HandshakeRequest : HandshakeBase
+  internal class HttpRequest : HttpBase
   {
     #region Private Fields
 
     private string _method;
     private string _uri;
     private bool   _websocketRequest;
-    private bool   _websocketRequestWasSet;
+    private bool   _websocketRequestSet;
 
     #endregion
 
     #region Private Constructors
 
-    private HandshakeRequest (Version version, NameValueCollection headers)
+    private HttpRequest (string method, string uri, Version version, NameValueCollection headers)
       : base (version, headers)
     {
+      _method = method;
+      _uri = uri;
     }
 
     #endregion
 
     #region Internal Constructors
 
-    internal HandshakeRequest (string pathAndQuery)
-      : base (HttpVersion.Version11, new NameValueCollection ())
+    internal HttpRequest (string method, string uri)
+      : this (method, uri, HttpVersion.Version11, new NameValueCollection ())
     {
-      _uri = pathAndQuery;
-      _method = "GET";
-
-      var headers = Headers;
-      headers["User-Agent"] = "websocket-sharp/1.0";
-      headers["Upgrade"] = "websocket";
-      headers["Connection"] = "Upgrade";
+      Headers["User-Agent"] = "websocket-sharp/1.0";
     }
 
     #endregion
 
     #region Public Properties
 
-    public AuthenticationResponse AuthResponse {
+    public AuthenticationResponse AuthenticationResponse {
       get {
-        var auth = Headers["Authorization"];
-        return auth != null && auth.Length > 0
-               ? AuthenticationResponse.Parse (auth)
+        var res = Headers["Authorization"];
+        return res != null && res.Length > 0
+               ? AuthenticationResponse.Parse (res)
                : null;
       }
     }
@@ -94,14 +98,14 @@ namespace WebSocketSharp
 
     public bool IsWebSocketRequest {
       get {
-        if (!_websocketRequestWasSet) {
+        if (!_websocketRequestSet) {
           var headers = Headers;
           _websocketRequest = _method == "GET" &&
                               ProtocolVersion > HttpVersion.Version10 &&
                               headers.Contains ("Upgrade", "websocket") &&
                               headers.Contains ("Connection", "Upgrade");
 
-          _websocketRequestWasSet = true;
+          _websocketRequestSet = true;
         }
 
         return _websocketRequest;
@@ -118,7 +122,45 @@ namespace WebSocketSharp
 
     #region Internal Methods
 
-    internal static HandshakeRequest Parse (string[] headerParts)
+    internal static HttpRequest CreateConnectRequest (Uri uri)
+    {
+      var host = uri.DnsSafeHost;
+      var port = uri.Port;
+      var authority = String.Format ("{0}:{1}", host, port);
+      var req = new HttpRequest ("CONNECT", authority);
+      req.Headers["Host"] = port == 80 ? host : authority;
+
+      return req;
+    }
+
+    internal static HttpRequest CreateWebSocketRequest (Uri uri)
+    {
+      var req = new HttpRequest ("GET", uri.PathAndQuery);
+      var headers = req.Headers;
+
+      // Only includes a port number in the Host header value if it's non-default.
+      // See: https://tools.ietf.org/html/rfc6455#page-17
+      var port = uri.Port;
+      var schm = uri.Scheme;
+      headers["Host"] = (port == 80 && schm == "ws") || (port == 443 && schm == "wss")
+                        ? uri.DnsSafeHost
+                        : uri.Authority;
+
+      headers["Upgrade"] = "websocket";
+      headers["Connection"] = "Upgrade";
+
+      return req;
+    }
+
+    internal HttpResponse GetResponse (Stream stream, int millisecondsTimeout)
+    {
+      var buff = ToByteArray ();
+      stream.Write (buff, 0, buff.Length);
+
+      return Read<HttpResponse> (stream, HttpResponse.Parse, millisecondsTimeout);
+    }
+
+    internal static HttpRequest Parse (string[] headerParts)
     {
       var requestLine = headerParts[0].Split (new[] { ' ' }, 3);
       if (requestLine.Length != 3)
@@ -126,13 +168,15 @@ namespace WebSocketSharp
 
       var headers = new WebHeaderCollection ();
       for (int i = 1; i < headerParts.Length; i++)
-        headers.SetInternally (headerParts[i], false);
+        headers.InternalSet (headerParts[i], false);
 
-      var req = new HandshakeRequest (new Version (requestLine[2].Substring (5)), headers);
-      req._method = requestLine[0];
-      req._uri = requestLine[1];
+      return new HttpRequest (
+        requestLine[0], requestLine[1], new Version (requestLine[2].Substring (5)), headers);
+    }
 
-      return req;
+    internal static HttpRequest Read (Stream stream, int millisecondsTimeout)
+    {
+      return Read<HttpRequest> (stream, Parse, millisecondsTimeout);
     }
 
     #endregion

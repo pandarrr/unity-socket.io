@@ -1,14 +1,14 @@
 #region License
 /*
- * ListenerPrefix.cs
+ * HttpListenerPrefix.cs
  *
- * This code is derived from System.Net.ListenerPrefix.cs of Mono
+ * This code is derived from ListenerPrefix.cs (System.Net) of Mono
  * (http://www.mono-project.com).
  *
  * The MIT License
  *
  * Copyright (c) 2005 Novell, Inc. (http://www.novell.com)
- * Copyright (c) 2012-2014 sta.blockhead
+ * Copyright (c) 2012-2015 sta.blockhead
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -43,29 +43,24 @@ using System.Net;
 
 namespace WebSocketSharp.Net
 {
-  internal sealed class ListenerPrefix
+  internal sealed class HttpListenerPrefix
   {
     #region Private Fields
 
-    IPAddress [] _addresses;
-    string       _host;
-    string       _original;
-    string       _path;
-    ushort       _port;
-    bool         _secure;
+    private IPAddress[]  _addresses;
+    private string       _host;
+    private HttpListener _listener;
+    private string       _original;
+    private string       _path;
+    private ushort       _port;
+    private bool         _secure;
 
     #endregion
 
-    #region Public Fields
+    #region Internal Constructors
 
-    public HttpListener Listener;
-
-    #endregion
-
-    #region Public Constructors
-
-    // Must be called after calling ListenerPrefix.CheckUriPrefix.
-    public ListenerPrefix (string uriPrefix)
+    // Must be called after calling the CheckPrefix method.
+    internal HttpListenerPrefix (string uriPrefix)
     {
       _original = uriPrefix;
       parse (uriPrefix);
@@ -75,7 +70,7 @@ namespace WebSocketSharp.Net
 
     #region Public Properties
 
-    public IPAddress [] Addresses {
+    public IPAddress[] Addresses {
       get {
         return _addresses;
       }
@@ -91,6 +86,22 @@ namespace WebSocketSharp.Net
       }
     }
 
+    public bool IsSecure {
+      get {
+        return _secure;
+      }
+    }
+
+    public HttpListener Listener {
+      get {
+        return _listener;
+      }
+
+      set {
+        _listener = value;
+      }
+    }
+
     public string Path {
       get {
         return _path;
@@ -100,12 +111,6 @@ namespace WebSocketSharp.Net
     public int Port {
       get {
         return (int) _port;
-      }
-    }
-
-    public bool Secure {
-      get {
-        return _secure;
       }
     }
 
@@ -119,76 +124,77 @@ namespace WebSocketSharp.Net
       if (defaultPort == 443)
         _secure = true;
 
-      var length = uriPrefix.Length;
+      var len = uriPrefix.Length;
       var startHost = uriPrefix.IndexOf (':') + 3;
-      var colon = uriPrefix.IndexOf (':', startHost, length - startHost);
-      int root;
+      var colon = uriPrefix.IndexOf (':', startHost, len - startHost);
+      var root = 0;
       if (colon > 0) {
-        root = uriPrefix.IndexOf ('/', colon, length - colon);
+        root = uriPrefix.IndexOf ('/', colon, len - colon);
         _host = uriPrefix.Substring (startHost, colon - startHost);
         _port = (ushort) Int32.Parse (uriPrefix.Substring (colon + 1, root - colon - 1));
-        _path = uriPrefix.Substring (root);
       }
       else {
-        root = uriPrefix.IndexOf ('/', startHost, length - startHost);
+        root = uriPrefix.IndexOf ('/', startHost, len - startHost);
         _host = uriPrefix.Substring (startHost, root - startHost);
         _port = (ushort) defaultPort;
-        _path = uriPrefix.Substring (root);
       }
 
-      if (_path.Length > 1)
-        _path = _path.Substring (0, _path.Length - 1);
+      _path = uriPrefix.Substring (root);
+
+      var pathLen = _path.Length;
+      if (pathLen > 1)
+        _path = _path.Substring (0, pathLen - 1);
     }
 
     #endregion
 
-    #region public Methods
+    #region Public Methods
 
-    public static void CheckUriPrefix (string uriPrefix)
+    public static void CheckPrefix (string uriPrefix)
     {
       if (uriPrefix == null)
         throw new ArgumentNullException ("uriPrefix");
 
-      if (!uriPrefix.StartsWith ("http://") && !uriPrefix.StartsWith ("https://"))
-        throw new ArgumentException ("Only 'http' and 'https' schemes are supported.");
+      var len = uriPrefix.Length;
+      if (len == 0)
+        throw new ArgumentException ("An empty string.");
 
-      var length = uriPrefix.Length;
+      if (!(uriPrefix.StartsWith ("http://") || uriPrefix.StartsWith ("https://")))
+        throw new ArgumentException ("The scheme isn't 'http' or 'https'.");
+
       var startHost = uriPrefix.IndexOf (':') + 3;
-      if (startHost >= length)
-        throw new ArgumentException ("No host specified.");
+      if (startHost >= len)
+        throw new ArgumentException ("No host is specified.");
 
-      var colon = uriPrefix.IndexOf (':', startHost, length - startHost);
+      var colon = uriPrefix.IndexOf (':', startHost, len - startHost);
       if (startHost == colon)
-        throw new ArgumentException ("No host specified.");
+        throw new ArgumentException ("No host is specified.");
 
-      int root;
       if (colon > 0) {
-        root = uriPrefix.IndexOf ('/', colon, length - colon);
+        var root = uriPrefix.IndexOf ('/', colon, len - colon);
         if (root == -1)
-          throw new ArgumentException ("No path specified.");
+          throw new ArgumentException ("No path is specified.");
 
         int port;
         if (!Int32.TryParse (uriPrefix.Substring (colon + 1, root - colon - 1), out port) ||
-            (port <= 0 || port >= 65536))
-          throw new ArgumentException ("Invalid port.");
+            !port.IsPortNumber ())
+          throw new ArgumentException ("An invalid port is specified.");
       }
       else {
-        root = uriPrefix.IndexOf ('/', startHost, length - startHost);
+        var root = uriPrefix.IndexOf ('/', startHost, len - startHost);
         if (root == -1)
-          throw new ArgumentException ("No path specified.");
+          throw new ArgumentException ("No path is specified.");
       }
 
-      if (uriPrefix [uriPrefix.Length - 1] != '/')
-        throw new ArgumentException ("The URI prefix must end with '/'.");
+      if (uriPrefix[len - 1] != '/')
+        throw new ArgumentException ("Ends without '/'.");
     }
 
-    // Equals and GetHashCode are required to detect duplicates in HttpListenerPrefixCollection.
-    public override bool Equals (object obj)
+    // The Equals and GetHashCode methods are required to detect duplicates in any collection.
+    public override bool Equals (Object obj)
     {
-      var other = obj as ListenerPrefix;
-      return other != null
-             ? _original == other._original
-             : false;
+      var pref = obj as HttpListenerPrefix;
+      return pref != null && pref._original == _original;
     }
 
     public override int GetHashCode ()

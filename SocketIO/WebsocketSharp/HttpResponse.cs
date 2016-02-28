@@ -1,6 +1,6 @@
 #region License
 /*
- * HandshakeResponse.cs
+ * HttpResponse.cs
  *
  * The MIT License
  *
@@ -28,12 +28,13 @@
 
 using System;
 using System.Collections.Specialized;
+using System.IO;
 using System.Text;
 using WebSocketSharp.Net;
 
 namespace WebSocketSharp
 {
-  internal class HandshakeResponse : HandshakeBase
+  internal class HttpResponse : HttpBase
   {
     #region Private Fields
 
@@ -44,45 +45,53 @@ namespace WebSocketSharp
 
     #region Private Constructors
 
-    private HandshakeResponse (Version version, NameValueCollection headers)
+    private HttpResponse (string code, string reason, Version version, NameValueCollection headers)
       : base (version, headers)
     {
+      _code = code;
+      _reason = reason;
     }
 
     #endregion
 
     #region Internal Constructors
 
-    internal HandshakeResponse (HttpStatusCode code)
-      : base (HttpVersion.Version11, new NameValueCollection ())
+    internal HttpResponse (HttpStatusCode code)
+      : this (code, code.GetDescription ())
     {
-      _code = ((int) code).ToString ();
-      _reason = code.GetDescription ();
+    }
 
-      var headers = Headers;
-      headers["Server"] = "websocket-sharp/1.0";
-      if (code == HttpStatusCode.SwitchingProtocols) {
-        headers["Upgrade"] = "websocket";
-        headers["Connection"] = "Upgrade";
-      }
+    internal HttpResponse (HttpStatusCode code, string reason)
+      : this (((int) code).ToString (), reason, HttpVersion.Version11, new NameValueCollection ())
+    {
+      Headers["Server"] = "websocket-sharp/1.0";
     }
 
     #endregion
 
     #region Public Properties
 
-    public AuthenticationChallenge AuthChallenge {
-      get {
-        var auth = Headers["WWW-Authenticate"];
-        return auth != null && auth.Length > 0
-               ? AuthenticationChallenge.Parse (auth)
-               : null;
-      }
-    }
-
     public CookieCollection Cookies {
       get {
         return Headers.GetCookies (true);
+      }
+    }
+
+    public bool HasConnectionClose {
+      get {
+        return Headers.Contains ("Connection", "close");
+      }
+    }
+
+    public bool IsProxyAuthenticationRequired {
+      get {
+        return _code == "407";
+      }
+    }
+
+    public bool IsRedirect {
+      get {
+        return _code == "301" || _code == "302";
       }
     }
 
@@ -118,15 +127,34 @@ namespace WebSocketSharp
 
     #region Internal Methods
 
-    internal static HandshakeResponse CreateCloseResponse (HttpStatusCode code)
+    internal static HttpResponse CreateCloseResponse (HttpStatusCode code)
     {
-      var res = new HandshakeResponse (code);
+      var res = new HttpResponse (code);
       res.Headers["Connection"] = "close";
 
       return res;
     }
 
-    internal static HandshakeResponse Parse (string[] headerParts)
+    internal static HttpResponse CreateUnauthorizedResponse (string challenge)
+    {
+      var res = new HttpResponse (HttpStatusCode.Unauthorized);
+      res.Headers["WWW-Authenticate"] = challenge;
+
+      return res;
+    }
+
+    internal static HttpResponse CreateWebSocketResponse ()
+    {
+      var res = new HttpResponse (HttpStatusCode.SwitchingProtocols);
+
+      var headers = res.Headers;
+      headers["Upgrade"] = "websocket";
+      headers["Connection"] = "Upgrade";
+
+      return res;
+    }
+
+    internal static HttpResponse Parse (string[] headerParts)
     {
       var statusLine = headerParts[0].Split (new[] { ' ' }, 3);
       if (statusLine.Length != 3)
@@ -134,13 +162,15 @@ namespace WebSocketSharp
 
       var headers = new WebHeaderCollection ();
       for (int i = 1; i < headerParts.Length; i++)
-        headers.SetInternally (headerParts[i], true);
+        headers.InternalSet (headerParts[i], true);
 
-      var res = new HandshakeResponse (new Version (statusLine[0].Substring (5)), headers);
-      res._code = statusLine[1];
-      res._reason = statusLine[2];
+      return new HttpResponse (
+        statusLine[1], statusLine[2], new Version (statusLine[0].Substring (5)), headers);
+    }
 
-      return res;
+    internal static HttpResponse Read (Stream stream, int millisecondsTimeout)
+    {
+      return Read<HttpResponse> (stream, Parse, millisecondsTimeout);
     }
 
     #endregion

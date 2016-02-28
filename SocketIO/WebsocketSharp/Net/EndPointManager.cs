@@ -2,13 +2,13 @@
 /*
  * EndPointManager.cs
  *
- * This code is derived from System.Net.EndPointManager.cs of Mono
+ * This code is derived from EndPointManager.cs (System.Net) of Mono
  * (http://www.mono-project.com).
  *
  * The MIT License
  *
  * Copyright (c) 2005 Novell, Inc. (http://www.novell.com)
- * Copyright (c) 2012-2014 sta.blockhead
+ * Copyright (c) 2012-2015 sta.blockhead
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -37,6 +37,13 @@
  */
 #endregion
 
+#region Contributors
+/*
+ * Contributors:
+ * - Liryna <liryna.stark@gmail.com>
+ */
+#endregion
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -46,10 +53,19 @@ namespace WebSocketSharp.Net
 {
   internal sealed class EndPointManager
   {
-    #region Private Static Fields
+    #region Private Fields
 
-    private static Dictionary<IPAddress, Dictionary<int, EndPointListener>> _ipToEndpoints =
-      new Dictionary<IPAddress, Dictionary<int, EndPointListener>> ();
+    private static readonly Dictionary<IPAddress, Dictionary<int, EndPointListener>>
+      _addressToEndpoints;
+
+    #endregion
+
+    #region Static Constructor
+
+    static EndPointManager ()
+    {
+      _addressToEndpoints = new Dictionary<IPAddress, Dictionary<int, EndPointListener>> ();
+    }
 
     #endregion
 
@@ -63,119 +79,145 @@ namespace WebSocketSharp.Net
 
     #region Private Methods
 
-    private static void addPrefix (string uriPrefix, HttpListener httpListener)
+    private static void addPrefix (string uriPrefix, HttpListener listener)
     {
-      var prefix = new ListenerPrefix (uriPrefix);
-      if (prefix.Path.IndexOf ('%') != -1)
+      var pref = new HttpListenerPrefix (uriPrefix);
+
+      var path = pref.Path;
+      if (path.IndexOf ('%') != -1)
         throw new HttpListenerException (400, "Invalid path."); // TODO: Code?
 
-      if (prefix.Path.IndexOf ("//", StringComparison.Ordinal) != -1)
+      if (path.IndexOf ("//", StringComparison.Ordinal) != -1)
         throw new HttpListenerException (400, "Invalid path."); // TODO: Code?
 
-      // Always listens on all the interfaces, no matter the host name/ip used.
-      var epListener = getEndPointListener (
-        IPAddress.Any, prefix.Port, httpListener, prefix.Secure);
+      // Listens on all the interfaces if host name cannot be parsed by IPAddress.
+      getEndPointListener (pref, listener).AddPrefix (pref, listener);
+    }
 
-      epListener.AddPrefix (prefix, httpListener);
+    private static IPAddress convertToIPAddress (string hostname)
+    {
+      if (hostname == "*" || hostname == "+")
+        return IPAddress.Any;
+
+      IPAddress addr;
+      if (IPAddress.TryParse (hostname, out addr))
+        return addr;
+
+      try {
+        var host = Dns.GetHostEntry (hostname);
+        return host != null ? host.AddressList[0] : IPAddress.Any;
+      }
+      catch {
+        return IPAddress.Any;
+      }
     }
 
     private static EndPointListener getEndPointListener (
-      IPAddress address, int port, HttpListener httpListener, bool secure)
+      HttpListenerPrefix prefix, HttpListener listener)
     {
-      Dictionary<int, EndPointListener> endpoints = null;
-      if (_ipToEndpoints.ContainsKey (address)) {
-        endpoints = _ipToEndpoints [address];
+      var addr = convertToIPAddress (prefix.Host);
+
+      Dictionary<int, EndPointListener> eps = null;
+      if (_addressToEndpoints.ContainsKey (addr)) {
+        eps = _addressToEndpoints[addr];
       }
       else {
-        endpoints = new Dictionary<int, EndPointListener> ();
-        _ipToEndpoints [address] = endpoints;
+        eps = new Dictionary<int, EndPointListener> ();
+        _addressToEndpoints[addr] = eps;
       }
 
-      EndPointListener epListener = null;
-      if (endpoints.ContainsKey (port)) {
-        epListener = endpoints [port];
+      var port = prefix.Port;
+
+      EndPointListener lsnr = null;
+      if (eps.ContainsKey (port)) {
+        lsnr = eps[port];
       }
       else {
-        epListener = new EndPointListener (
-          address,
+        lsnr = new EndPointListener (
+          addr,
           port,
-          secure,
-          httpListener.CertificateFolderPath,
-          httpListener.DefaultCertificate);
+          listener.ReuseAddress,
+          prefix.IsSecure,
+          listener.CertificateFolderPath,
+          listener.SslConfiguration);
 
-        endpoints [port] = epListener;
+        eps[port] = lsnr;
       }
 
-      return epListener;
+      return lsnr;
     }
 
-    private static void removePrefix (string uriPrefix, HttpListener httpListener)
+    private static void removePrefix (string uriPrefix, HttpListener listener)
     {
-      var prefix = new ListenerPrefix (uriPrefix);
-      if (prefix.Path.IndexOf ('%') != -1)
+      var pref = new HttpListenerPrefix (uriPrefix);
+
+      var path = pref.Path;
+      if (path.IndexOf ('%') != -1)
         return;
 
-      if (prefix.Path.IndexOf ("//", StringComparison.Ordinal) != -1)
+      if (path.IndexOf ("//", StringComparison.Ordinal) != -1)
         return;
 
-      var epListener = getEndPointListener (
-        IPAddress.Any, prefix.Port, httpListener, prefix.Secure);
+      getEndPointListener (pref, listener).RemovePrefix (pref, listener);
+    }
 
-      epListener.RemovePrefix (prefix, httpListener);
+    #endregion
+
+    #region Internal Methods
+
+    internal static void RemoveEndPoint (EndPointListener listener)
+    {
+      lock (((ICollection) _addressToEndpoints).SyncRoot) {
+        var addr = listener.Address;
+        var eps = _addressToEndpoints[addr];
+        eps.Remove (listener.Port);
+        if (eps.Count == 0)
+          _addressToEndpoints.Remove (addr);
+
+        listener.Close ();
+      }
     }
 
     #endregion
 
     #region Public Methods
 
-    public static void AddListener (HttpListener httpListener)
+    public static void AddListener (HttpListener listener)
     {
       var added = new List<string> ();
-      lock (((ICollection) _ipToEndpoints).SyncRoot) {
+      lock (((ICollection) _addressToEndpoints).SyncRoot) {
         try {
-          foreach (var prefix in httpListener.Prefixes) {
-            addPrefix (prefix, httpListener);
-            added.Add (prefix);
+          foreach (var pref in listener.Prefixes) {
+            addPrefix (pref, listener);
+            added.Add (pref);
           }
         }
         catch {
-          foreach (var prefix in added)
-            removePrefix (prefix, httpListener);
+          foreach (var pref in added)
+            removePrefix (pref, listener);
 
           throw;
         }
       }
     }
 
-    public static void AddPrefix (string uriPrefix, HttpListener httpListener)
+    public static void AddPrefix (string uriPrefix, HttpListener listener)
     {
-      lock (((ICollection) _ipToEndpoints).SyncRoot)
-        addPrefix (uriPrefix, httpListener);
+      lock (((ICollection) _addressToEndpoints).SyncRoot)
+        addPrefix (uriPrefix, listener);
     }
 
-    public static void RemoveEndPoint (EndPointListener epListener, IPEndPoint endpoint)
+    public static void RemoveListener (HttpListener listener)
     {
-      lock (((ICollection) _ipToEndpoints).SyncRoot) {
-        var endpoints = _ipToEndpoints [endpoint.Address];
-        endpoints.Remove (endpoint.Port);
-        if (endpoints.Count == 0)
-          _ipToEndpoints.Remove (endpoint.Address);
-
-        epListener.Close ();
-      }
+      lock (((ICollection) _addressToEndpoints).SyncRoot)
+        foreach (var pref in listener.Prefixes)
+          removePrefix (pref, listener);
     }
 
-    public static void RemoveListener (HttpListener httpListener)
+    public static void RemovePrefix (string uriPrefix, HttpListener listener)
     {
-      lock (((ICollection) _ipToEndpoints).SyncRoot)
-        foreach (var prefix in httpListener.Prefixes)
-          removePrefix (prefix, httpListener);
-    }
-
-    public static void RemovePrefix (string uriPrefix, HttpListener httpListener)
-    {
-      lock (((ICollection) _ipToEndpoints).SyncRoot)
-        removePrefix (uriPrefix, httpListener);
+      lock (((ICollection) _addressToEndpoints).SyncRoot)
+        removePrefix (uriPrefix, listener);
     }
 
     #endregion
