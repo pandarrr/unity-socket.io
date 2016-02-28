@@ -26,25 +26,41 @@
  */
 #endregion
 
+using System;
+
 namespace SocketIO
 {
-	public class SocketIOEvent
+	public class SocketMessage
 	{
-		public string name { get; set; }
-
-		public JSONObject data { get; set; }
-
-		public SocketIOEvent(string name) : this(name, null) { }
-		
-		public SocketIOEvent(string name, JSONObject data)
+		public string Name { get; set; }
+		public JSONObject Data { get; set; }
+        
+		public SocketMessage(string name, JSONObject data = null)
 		{
-			this.name = name;
-			this.data = data;
+			Name = name;
+			Data = data;
 		}
-		
-		public override string ToString()
+
+        public static SocketMessage Parse(JSONObject json)
+        {
+            if (json.Count < 1 || json.Count > 2)
+                throw new SocketIOException(string.Format("Invalid number of parameters received: {0}", json.Count));
+
+            if (json[0].type != JSONObject.Type.STRING)
+                throw new SocketIOException(string.Format("Invalid parameter type. {0} received while expecting {1}", json[0].type, JSONObject.Type.STRING));
+
+            if (json.Count == 1)
+                return new SocketMessage(json[0].str);
+
+            if (json[1].type != JSONObject.Type.OBJECT)
+                throw new SocketIOException(string.Format("Invalid parameter type. {0} received while expecting {1}", json[1].type, JSONObject.Type.OBJECT));
+
+            return new SocketMessage(json[0].str, json[1]);
+        }
+
+        public override string ToString()
 		{
-			return string.Format("[SocketIOEvent: name={0}, data={1}]", name, data);
+			return string.Format("[SocketIOEvent: name={0}, data={1}]", Name, Data);
 		}
 	}
 }
